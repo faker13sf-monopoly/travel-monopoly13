@@ -102,19 +102,13 @@ const DOM = {
         deleteTrip: document.getElementById('btn-delete-trip'),
         addActivity: document.getElementById('btn-add-activity'),
         submitActivity: document.querySelector('#form-add-activity button[type="submit"]'),
-    },
-    forms: {
-        createTrip: document.getElementById('form-create-trip'),
-        addActivity: document.getElementById('form-add-activity'),
-    },
-    detailHeader: {
-        title: document.getElementById('detail-trip-title'),
-        dates: document.getElementById('detail-trip-dates'),
-        totalCost: document.getElementById('trip-total-cost'),
+        exportCsv: document.getElementById('btn-export-csv'),
+        importCsvBtn: document.getElementById('btn-import-csv'),
     },
     inputs: {
         tripId: document.getElementById('trip-id'),
         sortTrips: document.getElementById('sort-trips'),
+        importCsvFile: document.getElementById('import-csv-file'),
         currency: document.getElementById('setting-currency'),
         activityDay: document.getElementById('activity-day-select'),
         activityTripId: document.getElementById('activity-trip-id'),
@@ -199,6 +193,146 @@ const Utils = {
             }
         }
         return expression;
+    },
+
+    // --- CSV Helpers ---
+    escapeCSV: (str) => {
+        if (str === null || str === undefined) return '';
+        const stringVal = String(str);
+        if (stringVal.includes(',') || stringVal.includes('"') || stringVal.includes('\n')) {
+            return `"${stringVal.replace(/"/g, '""')}"`;
+        }
+        return stringVal;
+    },
+
+    exportTripsToCSV: (trips) => {
+        const header = ['TripID', 'Destination', 'StartDate', 'EndDate', 'Currency', 'ImageUrl', 'ActivityID', 'ActivityDay', 'StartTime', 'EndTime', 'Title', 'Cost', 'Notes'];
+        const rows = [header.join(',')];
+
+        trips.forEach(trip => {
+            if (!trip.activities || trip.activities.length === 0) {
+                // Trip with no activities
+                const row = [
+                    trip.id, trip.destination, trip.startDate, trip.endDate, trip.currency || 'JPY', trip.imageUrl || '',
+                    '', '', '', '', '', '', ''
+                ].map(Utils.escapeCSV);
+                rows.push(row.join(','));
+            } else {
+                // Trip with activities
+                trip.activities.forEach(activity => {
+                    const row = [
+                        trip.id, trip.destination, trip.startDate, trip.endDate, trip.currency || 'JPY', trip.imageUrl || '',
+                        activity.id, activity.day, activity.time, activity.endTime || '', activity.title, activity.cost || '', activity.notes || ''
+                    ].map(Utils.escapeCSV);
+                    rows.push(row.join(','));
+                });
+            }
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + rows.join('\n'); // Add BOM for Excel
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "wanderlust_trips.csv");
+        document.body.appendChild(link); // Required for FF
+        link.click();
+        document.body.removeChild(link);
+    },
+
+    parseCSVLine: (text) => {
+        const result = [];
+        let curVal = '';
+        let inQuotes = false;
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            if (inQuotes) {
+                if (char === '"') {
+                    if (text[i + 1] === '"') {
+                        curVal += '"';
+                        i++; // Skip escaped quote
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    curVal += char;
+                }
+            } else {
+                if (char === '"') {
+                    inQuotes = true;
+                } else if (char === ',') {
+                    result.push(curVal);
+                    curVal = '';
+                } else {
+                    curVal += char;
+                }
+            }
+        }
+        result.push(curVal);
+        return result;
+    },
+
+    importTripsFromCSV: (csvText) => {
+        // Handle different newline formats
+        const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
+        if (lines.length < 2) return []; // Need at least header and one data row
+
+        // Check if BOM exists and remove it
+        if (lines[0].charCodeAt(0) === 0xFEFF) {
+            lines[0] = lines[0].substring(1);
+        }
+
+        const headers = Utils.parseCSVLine(lines[0]);
+        const tripsMap = new Map();
+
+        for (let i = 1; i < lines.length; i++) {
+            const row = Utils.parseCSVLine(lines[i]);
+            if (row.length < 6) continue; // Basic validation
+
+            const tripId = row[0];
+            const destination = row[1];
+            const startDate = row[2];
+            const endDate = row[3];
+            const currency = row[4];
+            const imageUrl = row[5];
+
+            const activityId = row[6];
+            const activityDay = row[7];
+            const startTime = row[8];
+            const endTime = row[9];
+            const title = row[10];
+            const cost = row[11];
+            const notes = row[12];
+
+            if (!tripsMap.has(tripId)) {
+                tripsMap.set(tripId, {
+                    id: tripId,
+                    destination,
+                    startDate,
+                    endDate,
+                    currency,
+                    imageUrl,
+                    activities: []
+                });
+            }
+
+            if (activityId && title) {
+                const trip = tripsMap.get(tripId);
+                // Check if activity already exists (prevent duplicates if same file imported twice)
+                if (!trip.activities.find(a => a.id === activityId)) {
+                    trip.activities.push({
+                        id: activityId,
+                        day: activityDay,
+                        time: startTime,
+                        endTime: endTime,
+                        title: title,
+                        cost: cost,
+                        notes: notes
+                    });
+                }
+            }
+        }
+
+        return Array.from(tripsMap.values());
     }
 };
 
@@ -227,12 +361,60 @@ const App = {
         });
 
         // Navigation (Internal)
-        DOM.buttons.backToDashboard.addEventListener('click', () => {
-            this.switchView('dashboard');
-            // Update sidebar
-            document.querySelectorAll('.sidebar li').forEach(el => el.classList.remove('active'));
-            document.querySelector('.sidebar li[data-view="dashboard"]').classList.add('active');
-        });
+        if (DOM.buttons.backToDashboard) {
+            DOM.buttons.backToDashboard.addEventListener('click', () => {
+                this.switchView('dashboard');
+                // Update sidebar
+                document.querySelectorAll('.sidebar li').forEach(el => el.classList.remove('active'));
+                const dashboardLi = document.querySelector('.sidebar li[data-view="dashboard"]');
+                if (dashboardLi) dashboardLi.classList.add('active');
+            });
+        }
+
+        // CSV Export/Import
+        if (DOM.buttons.exportCsv) {
+            DOM.buttons.exportCsv.addEventListener('click', () => {
+                Utils.exportTripsToCSV(State.trips);
+            });
+        }
+
+        if (DOM.buttons.importCsvBtn && DOM.inputs.importCsvFile) {
+            DOM.buttons.importCsvBtn.addEventListener('click', () => {
+                DOM.inputs.importCsvFile.click();
+            });
+
+            DOM.inputs.importCsvFile.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const csvText = event.target.result;
+                    const importedTrips = Utils.importTripsFromCSV(csvText);
+
+                    if (importedTrips && importedTrips.length > 0) {
+                        // Merge imported trips with existing
+                        importedTrips.forEach(importedTrip => {
+                            const existingIdx = State.trips.findIndex(t => t.id === importedTrip.id);
+                            if (existingIdx >= 0) {
+                                // Overwrite existing trip entirely
+                                State.trips[existingIdx] = importedTrip;
+                            } else {
+                                State.trips.push(importedTrip);
+                            }
+                        });
+                        State.save();
+                        this.renderDashboard();
+                        alert(`${importedTrips.length} trip(s) imported successfully!`);
+                    } else {
+                        alert('Could not parse any trips from the CSV file.');
+                    }
+                    // Reset input so the same file can be selected again
+                    DOM.inputs.importCsvFile.value = '';
+                };
+                reader.readAsText(file);
+            });
+        }
 
         // Modals
         DOM.buttons.newTrip.addEventListener('click', () => {

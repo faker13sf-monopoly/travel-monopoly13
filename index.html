@@ -51,6 +51,13 @@
                         <p class="subtitle">Plan your next adventure.</p>
                     </div>
                     <div class="header-controls">
+                        <input type="file" id="import-csv-file" accept=".csv" style="display: none;">
+                        <button id="btn-import-csv" class="btn-secondary" title="Import Trips from CSV">
+                            <ion-icon name="cloud-upload-outline"></ion-icon>
+                        </button>
+                        <button id="btn-export-csv" class="btn-secondary" title="Export Trips to CSV">
+                            <ion-icon name="cloud-download-outline"></ion-icon>
+                        </button>
                         <select id="sort-trips" class="sort-select">
                             <option value="date-desc">Date (Latest First)</option>
                             <option value="date-asc">Date (Earliest First)</option>
